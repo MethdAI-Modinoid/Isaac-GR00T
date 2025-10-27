@@ -1,0 +1,42 @@
+dataset_list=(
+    "datasets/PhysicalAI-Robotics-GR00T-Teleop-G1/g1-pick-apple/"
+    "datasets/PhysicalAI-Robotics-GR00T-Teleop-G1/g1-pick-pear/"
+    "datasets/PhysicalAI-Robotics-GR00T-Teleop-G1/g1-pick-grapes/"
+    "datasets/PhysicalAI-Robotics-GR00T-Teleop-G1/g1-pick-starfruit/"
+)
+
+export HF_HUB_DISABLE_XET=1
+
+export PATH=/usr/local/cuda-12.8/bin${PATH:+:${PATH}}
+export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+export CUDA_HOME=/usr/local/cuda-12.8
+
+
+PYTHONPATH=$PWD python scripts/gr00t_finetune.py \
+    --dataset-path ${dataset_list[@]} \
+    --num-gpus 1 --batch-size 95  --output-dir ./checkpoints/full-g1-mix-fruits/  \
+    --data-config unitree_g1 --max-steps 15000
+
+PYTHONPATH=$PWD python g1_deploy/eval_g1.py \
+    --policy_host=0.0.0.0 \
+    --lang_instruction="Pick the apple from the table and place it into the basket."
+
+
+source ~/drive2/humanoid_ws/install/setup.bash
+source ~/drive2/humanoid_ws/src/unitree_ros2/cyclonedds_ws/install/setup.bash
+source ~/drive2/humanoid_ws/src/unitree_ros2/setup.sh
+
+export CYCLONEDDS_URI=file:///home/deepansh/drive2/humanoid_ws/src/unitree_ros2/cyclonedds_ws/src/cyclonedds.xml
+export CYCLONEDDS_HOME="~/drive2/humanoid_ws/src/unitree_ros2/cyclonedds_ws/install/cyclonedds"
+
+
+cd ~/drive2
+git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x 
+cd cyclonedds && mkdir build install && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=../install
+cmake --build . --target install
+
+
+sudo apt install ros-jazzy-rmw-cyclonedds-cpp
+sudo apt install ros-jazzy-rosidl-generator-dds-idl
+sudo apt install libyaml-cpp-dev
