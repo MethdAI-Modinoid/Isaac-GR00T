@@ -11,6 +11,9 @@ from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandState_
+from unitree_sdk2py.idl.unitree_go.msg.dds_ import AudioData_
+
+
 from unitree_sdk2py.utils.crc import CRC
 from unitree_sdk2py.utils.thread import RecurrentThread
 from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient
@@ -92,7 +95,11 @@ class Custom:
         self.right_hand_state = None
         self.low_state = None 
         self.update_mode_machine_ = False
-        self.target_states = [0.0] * 29
+        self.target_states = [0.0] * 43
+        self.rgb_image = None
+        self.depth_image = None
+        self.width, self.height = 640, 480
+
         self.crc = CRC()
         self.use_sim = use_sim
 
@@ -129,6 +136,12 @@ class Custom:
         self.righthandstate_subscriber = ChannelSubscriber("rt/dex3/right/state", HandState_)
         self.righthandstate_subscriber.Init(self.RightHandStateHandler, 10)
 
+        self.rgb_sub = ChannelSubscriber("rt/camera/rgb", AudioData_)
+        self.depth_sub = ChannelSubscriber("rt/camera/depth", AudioData_)
+        
+        self.rgb_sub.Init(self._sdk2_rgb_handler, 10)
+        self.depth_sub.Init(self._sdk2_depth_handler, 10)
+
     def Start(self):
         self.lowCmdWriteThreadPtr = RecurrentThread(
             interval=self.control_dt_, target=self.LowCmdWrite, name="control"
@@ -158,6 +171,59 @@ class Custom:
     def RightHandStateHandler(self, msg: HandState_):
         self.right_hand_state = msg
         # print("Right hand state received")
+
+    def _sdk2_rgb_handler(self, msg: AudioData_):
+        """Handle RGB camera messages from SDK2"""
+        # print(len(msg.data))
+        try:
+            if len(msg.data) > 0:
+                # Convert list of integers to numpy array
+                img_array = np.array(msg.data, dtype=np.uint8)
+                
+                # Reshape to image dimensions (height, width, channels)
+                if len(img_array) >= self.height * self.width * 3:
+                    self.rgb_image = img_array[:self.height*self.width*3].reshape(
+                        (self.height, self.width, 3))
+                    # self.rgb_frame_count += 1
+
+                # self.rgb_image = img_array
+                    
+        except Exception as e:
+            print(f"RGB handler error: {e}")
+    
+    def _sdk2_depth_handler(self, msg: AudioData_):
+        """Handle depth camera messages from SDK2"""
+        try:
+            if len(msg.data) > 0:
+                # Convert list of integers to numpy array
+                img_array = np.array(msg.data, dtype=np.uint8)
+                
+                # Depth is single channel
+                if len(img_array) >= self.height * self.width:
+                    self.depth_image = img_array[:self.height*self.width].reshape(
+                        (self.height, self.width))
+                    # self.depth_frame_count += 1
+                    
+        except Exception as e:
+            print(f"Depth handler error: {e}")
+
+    def get_rgb_image(self):
+        """
+        Get the latest RGB image
+        
+        Returns:
+            numpy.ndarray: RGB image (H, W, 3) or None if no data
+        """
+        return self.rgb_image
+    
+    def get_depth_image(self):
+        """
+        Get the latest depth image
+        
+        Returns:
+            numpy.ndarray: Depth image (H, W) or None if no data
+        """
+        return self.depth_image
 
     def LowCmdWrite(self):
         """
@@ -265,12 +331,10 @@ class Custom:
             }
         }
 
-        # get rgb image from low_state
-        if self.low_state is not None:
-            # obtain image from camera server
-            observation_dict["video"]["rs_view"] = np.zeros((480, 640, 3), dtype=np.uint8)
-        else:
-            observation_dict["video"]["rs_view"] = np.zeros((480, 640, 3), dtype=np.uint8)
+        img = self.get_rgb_image()
+        if img is not None:
+            print(f"\n\n {img.shape} \n\n")
+        observation_dict["video"]["rs_view"] = img if img is not None else np.zeros((480, 640, 3), dtype=np.uint8)
 
         # get joint positions from low_state
         if self.low_state is not None:

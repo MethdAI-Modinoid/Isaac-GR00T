@@ -22,6 +22,8 @@ PYTHONPATH=$PWD python g1_deploy/eval_g1.py \
     --lang_instruction="Pick the apple from the table and place it into the basket."
 
 
+
+
 source ~/drive2/humanoid_ws/install/setup.bash
 source ~/drive2/humanoid_ws/src/unitree_ros2/cyclonedds_ws/install/setup.bash
 source ~/drive2/humanoid_ws/src/unitree_ros2/setup.sh
@@ -40,3 +42,9 @@ cmake --build . --target install
 sudo apt install ros-jazzy-rmw-cyclonedds-cpp
 sudo apt install ros-jazzy-rosidl-generator-dds-idl
 sudo apt install libyaml-cpp-dev
+
+
+~/drive2/humanoid_ws/src/Isaac-GR00T/.venv/bin
+export PATH=~/drive2/humanoid_ws/src/Isaac-GR00T/.venv/bin:$PATH
+
+xfreerdp /v:192.168.x.y

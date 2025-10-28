@@ -134,29 +134,26 @@ class Gr00tRobotInferenceClient:
             else:
                 obs_dict[k] = [obs_dict[k]]
 
-        print("Sending observation to policy server:")
-        print("  Keys:", obs_dict.keys())
-        for k, v in obs_dict.items():
-            if isinstance(v, np.ndarray):
-                print(f"  {k}: shape={v.shape}, dtype={v.dtype}")
-            else:
-                print(f"  {k}: {type(v)}")
+        # print("Sending observation to policy server:")
+        # # print("  Keys:", obs_dict.keys())
+        # for k, v in obs_dict.items():
+        #     if isinstance(v, np.ndarray):
+        #         print(f"  {k}: shape={v.shape}, dtype={v.dtype}")
+        #     else:
+        #         print(f"  {k}: {type(v)}")
 
         # Get the action chunk via the policy server
         action_chunk = self.policy.get_action(obs_dict)
 
-        print('**********************')
-        print(action_chunk.keys())
-        print('**********************')
-
-        print("Received action_chunk keys:", action_chunk.keys())
+        # print("Received action_chunk keys:", action_chunk.keys())
         
-        # Convert action chunk to list of actions
-        # Based on modality.json, actions have same structure as states
-        action_modalities = ["left_leg", "right_leg", "waist", "left_arm", 
-                           "left_hand", "right_arm", "right_hand"]
+        # # Convert action chunk to list of actions
+        # # Based on modality.json, actions have same structure as states
+        # action_modalities = ["left_leg", "right_leg", "waist", "left_arm", 
+        #                    "left_hand", "right_arm", "right_hand"]
         
-        g1_actions = []
+        # and emty numpy zero array list of 43 index made using np.zeros
+        
         # # Get action horizon from first action modality
         # if f"action.{action_modalities[0]}" in action_chunk:
         #     action_horizon = action_chunk[f"action.{action_modalities[0]}"].shape[0]
@@ -169,7 +166,20 @@ class Gr00tRobotInferenceClient:
         #                 action_dict[modality] = action_chunk[action_key][i]
         #         g1_actions.append(action_dict)
 
-        print(action_chunk['action.left_hand'])
+        # an empty zeros array of shape (16, 43)
+        g1_actions = np.zeros((16, 43), dtype=np.float64)
+
+        arr_left = action_chunk['action.left_hand']
+        arr_right = action_chunk['action.right_hand']
+        arr_left_arm = action_chunk['action.left_arm']
+        arr_right_arm = action_chunk['action.right_arm']
+
+        g1_actions[:, 29:36] = arr_left
+        g1_actions[:, 36:43] = arr_right
+        g1_actions[:, 15:22] = arr_left_arm
+        g1_actions[:, 22:29] = arr_right_arm
+
+
         return g1_actions
 
 
@@ -266,48 +276,31 @@ def eval(cfg: EvalConfig):
         return
 
     # Step 3: Run the Eval Loop
-    print(f"\nStarting evaluation with instruction: '{language_instruction}'")
-    print(f"Action horizon: {cfg.action_horizon}")
+    # print(f"\nStarting evaluation with instruction: '{language_instruction}'")
+    # print(f"Action horizon: {cfg.action_horizon}")
     
     try:
         iteration = 0
-        while iteration<3:
+        # while iteration<3:
+        while True:
             iteration += 1
             print(f"\n=== Iteration {iteration} ===")
             
             # Get the realtime observation
             observation_dict = custom.get_observation_gr00t()
-            print("Observation keys:", observation_dict.keys())
+            # print("Observation keys:", observation_dict.keys())
             
             # Get action chunk from policy
             action_chunk = policy.get_action(observation_dict, language_instruction)
             
-            if not action_chunk:
-                print("WARNING: No actions received from policy")
-                continue
+            # if not action_chunk:
+            #     print("WARNING: No actions received from policy")
+            #     continue
             
-            print(f"Received {len(action_chunk)} actions")
+            print(f"Received {action_chunk.shape} actions")
             
-            # Execute actions from the action chunk
-            for i in range(min(cfg.action_horizon, len(action_chunk))):
-                action_dict = action_chunk[i]
-                print(f"  Action {i} keys:", action_dict.keys())
-                
-                # Convert action dict to target states array (43 dimensions)
-                target_states = []
-                modality_order = ["left_leg", "right_leg", "waist", "left_arm", 
-                                "left_hand", "right_arm", "right_hand"]
-                
-                for modality in modality_order:
-                    if modality in action_dict:
-                        target_states.extend(action_dict[modality])
-                
-                if len(target_states) == 43:
-                    custom.target_states = target_states
-                    print(f"  Updated target states (43 dims)")
-                else:
-                    print(f"  WARNING: Expected 43 dims but got {len(target_states)}")
-                
+            for i in range(7):
+                custom.target_states = action_chunk[i]       
                 time.sleep(0.02)  # 50Hz control loop
             
     except KeyboardInterrupt:
