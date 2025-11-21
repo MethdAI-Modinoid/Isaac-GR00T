@@ -19,6 +19,14 @@ from unitree_sdk2py.utils.thread import RecurrentThread
 from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient
 
 import numpy as np
+import threading
+
+try:
+    # Prefer package relative import when available
+    from .image_client import ImageClient
+except Exception:
+    # Fallback to absolute import when running as a script
+    from image_client import ImageClient
 
 G1_NUM_MOTOR = 29
 
@@ -100,6 +108,10 @@ class Custom:
         self.depth_image = None
         self.width, self.height = 640, 480
 
+        # Image client (used when not running in sim)
+        self.image_client = None
+        self._image_client_thread = None
+
         self.crc = CRC()
         self.use_sim = use_sim
 
@@ -117,7 +129,7 @@ class Custom:
             status, result = self.msc.CheckMode()
             time.sleep(1)
 
-        # create publisher #
+    # create publisher #
         self.lowcmd_publisher_ = ChannelPublisher("rt/lowcmd", LowCmd_)
         self.lowcmd_publisher_.Init()
 
@@ -127,7 +139,7 @@ class Custom:
         self.left_hand_cmd_publisher_.Init()
 
 
-        # create subscriber # 
+        # create subscriber # (low state and hand states are always DDS)
         self.lowstate_subscriber = ChannelSubscriber("rt/lowstate", LowState_)
         self.lowstate_subscriber.Init(self.LowStateHandler, 10)
 
@@ -136,11 +148,25 @@ class Custom:
         self.righthandstate_subscriber = ChannelSubscriber("rt/dex3/right/state", HandState_)
         self.righthandstate_subscriber.Init(self.RightHandStateHandler, 10)
 
-        self.rgb_sub = ChannelSubscriber("rt/camera/rgb", AudioData_)
-        self.depth_sub = ChannelSubscriber("rt/camera/depth", AudioData_)
-        
-        self.rgb_sub.Init(self._sdk2_rgb_handler, 10)
-        self.depth_sub.Init(self._sdk2_depth_handler, 10)
+        # Camera input: if running in sim, use DDS topics; otherwise use the ImageClient
+        if self.use_sim:
+            self.rgb_sub = ChannelSubscriber("rt/camera/rgb", AudioData_)
+            self.depth_sub = ChannelSubscriber("rt/camera/depth", AudioData_)
+            self.rgb_sub.Init(self._sdk2_rgb_handler, 10)
+            self.depth_sub.Init(self._sdk2_depth_handler, 10)
+        else:
+            try:
+                # Create ImageClient to receive images from the external image server
+                # using defaults from image_client.ImageClient. You can override parameters
+                # by editing this call if needed (server_address, port, shared memory, etc.).
+                self.image_client = ImageClient(image_show=False, Unit_Test=False)
+                # Run the receive loop in a daemon thread so it doesn't block Init
+                self._image_client_thread = threading.Thread(
+                    target=self.image_client.receive_process, daemon=True
+                )
+                self._image_client_thread.start()
+            except Exception as e:
+                print(f"Failed to start ImageClient: {e}")
 
     def Start(self):
         self.lowCmdWriteThreadPtr = RecurrentThread(
@@ -214,6 +240,13 @@ class Custom:
         Returns:
             numpy.ndarray: RGB image (H, W, 3) or None if no data
         """
+        # If an ImageClient is active (non-sim mode), prefer its latest image
+        if self.image_client is not None:
+            try:
+                return self.image_client.get_rgb_image()
+            except Exception:
+                # fall back to DDS-provided image if any
+                return self.rgb_image
         return self.rgb_image
     
     def get_depth_image(self):
@@ -223,6 +256,8 @@ class Custom:
         Returns:
             numpy.ndarray: Depth image (H, W) or None if no data
         """
+        # Depth frames are only provided by DDS handlers in this setup.
+        # If you add depth support to ImageClient, prefer that here.
         return self.depth_image
 
     def LowCmdWrite(self):
@@ -353,9 +388,9 @@ class Custom:
             left_leg     = joint_positions[0:6]
             right_leg    = joint_positions[6:12]
             waist        = joint_positions[12:15]
-            left_arm     = joint_positions[15:22]
-            left_hand    = joint_positions[22:29]
-            right_arm    = joint_positions[29:36]
+            right_arm     = joint_positions[15:22]
+            left_hand    = joint_positions[29:36]
+            left_arm    = joint_positions[22:29]
             right_hand   = joint_positions[36:43]
 
             # Store in the correct structured state dict

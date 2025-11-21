@@ -85,10 +85,10 @@ Kd = [
 # Sometimes we would like to abstract different env, or run this on a separate machine
 # User can just move this single python class method gr00t/eval/service.py
 # to their code or do the following line below
-sys.path.append(os.path.expanduser("~/drive2/humanoid_ws/src/Isaac-GR00T/gr00t/eval/"))
-from service import ExternalRobotInferenceClient
+# sys.path.append(os.path.expanduser("~/drive2/humanoid_ws/src/Isaac-GR00T/gr00t/eval/"))
+# from service import ExternalRobotInferenceClient
 
-# from gr00t.eval.service import ExternalRobotInferenceClient
+from gr00t.eval.service import ExternalRobotInferenceClient
 
 #################################################################################
 
@@ -100,9 +100,13 @@ class Gr00tRobotInferenceClient:
         host="localhost",
         port=5555,
         show_images=False,
+        # If True, convert incoming images from BGR (OpenCV) to RGB before sending
+        assume_bgr: bool = True,
     ):
         self.policy = ExternalRobotInferenceClient(host=host, port=port)
         self.show_images = show_images
+        self.assume_bgr = assume_bgr
+        self.logger = logging.getLogger(__name__)
 
     def get_action(self, observation_dict, lang: str):
         """
@@ -116,9 +120,28 @@ class Gr00tRobotInferenceClient:
         for state_key, state_value in observation_dict["state"].items():
             obs_dict[f"state.{state_key}"] = state_value
         
-        # Add video modalities
+        # Add video modalities - ensure dtype and channel order (uint8 RGB)
         for video_key, video_value in observation_dict["video"].items():
-            obs_dict[f"video.{video_key}"] = video_value
+            # try to coerce to numpy array
+            try:
+                vid = np.asarray(video_value)
+            except Exception:
+                self.logger.warning(f"Video modality '{video_key}' is not array-like; sending as-is")
+                obs_dict[f"video.{video_key}"] = video_value
+                continue
+
+            # Ensure last axis is color channels
+            if vid.ndim == 3 and vid.shape[2] == 3:
+                # convert dtype if needed
+                if vid.dtype != np.uint8:
+                    vid = vid.astype(np.uint8)
+                # optionally convert BGR->RGB for OpenCV-sourced frames
+                if self.assume_bgr:
+                    try:
+                        vid = vid[..., ::-1]
+                    except Exception:
+                        pass
+            obs_dict[f"video.{video_key}"] = vid
         
         # Add annotation
         obs_dict["annotation.human.task_description"] = lang
@@ -145,6 +168,23 @@ class Gr00tRobotInferenceClient:
         # Get the action chunk via the policy server
         action_chunk = self.policy.get_action(obs_dict)
 
+        # Robust logging of policy response
+        if isinstance(action_chunk, dict):
+            # print keys and shapes where possible
+            info_lines = []
+            for k, v in action_chunk.items():
+                try:
+                    shape = np.asarray(v).shape
+                except Exception:
+                    shape = None
+                info_lines.append(f"{k}: shape={shape}")
+            self.logger.info("Policy returned dict with keys: %s", ", ".join(info_lines))
+        else:
+            try:
+                self.logger.info("Policy returned array with shape=%s", np.asarray(action_chunk).shape)
+            except Exception:
+                self.logger.info("Policy returned response of type %s", type(action_chunk))
+
         # print("Received action_chunk keys:", action_chunk.keys())
         
         # # Convert action chunk to list of actions
@@ -166,21 +206,77 @@ class Gr00tRobotInferenceClient:
         #                 action_dict[modality] = action_chunk[action_key][i]
         #         g1_actions.append(action_dict)
 
-        # an empty zeros array of shape (16, 43)
-        g1_actions = np.zeros((16, 43), dtype=np.float64)
+        # Expected action keys for unitree_g1 modality (we require these keys)
+        required = [
+            'action.left_hand',
+            'action.right_hand',
+            'action.left_arm',
+            'action.right_arm',
+        ]
 
-        arr_left = action_chunk['action.left_hand']
-        arr_right = action_chunk['action.right_hand']
-        arr_left_arm = action_chunk['action.left_arm']
-        arr_right_arm = action_chunk['action.right_arm']
+        # If server returned a dict, validate keys
+        if isinstance(action_chunk, dict):
+            for k in required:
+                if k not in action_chunk:
+                    self.logger.error("Policy response missing required key: %s", k)
+                    # return a safe zero action chunk of shape (16, 43)
+                    return np.zeros((16, 43), dtype=np.float64)
 
-        g1_actions[:, 29:36] = arr_left
-        g1_actions[:, 36:43] = arr_right
-        g1_actions[:, 15:22] = arr_left_arm
-        g1_actions[:, 22:29] = arr_right_arm
+            # determine horizon from one of the modalities
+            try:
+                horizon = int(np.asarray(action_chunk[required[0]]).shape[0])
+            except Exception:
+                horizon = 16
 
+            # prepare container
+            g1_actions = np.zeros((horizon, 43), dtype=np.float64)
 
-        return g1_actions
+            # fill in the arrays (convert to numpy arrays)
+            try:
+                arr_left = np.asarray(action_chunk['action.left_hand']).astype(np.float64)
+                arr_right = np.asarray(action_chunk['action.right_hand']).astype(np.float64)
+                arr_left_arm = np.asarray(action_chunk['action.left_arm']).astype(np.float64)
+                arr_right_arm = np.asarray(action_chunk['action.right_arm']).astype(np.float64)
+
+                # validate shapes: expected widths
+                # left_hand/right_hand: 7 elements each -> indices 29:36 and 36:43
+                # left_arm/right_arm: 7 elements each -> indices 15:22 and 22:29
+                for arr, name, expected_len in [
+                    (arr_left, 'action.left_hand', 7),
+                    (arr_right, 'action.right_hand', 7),
+                    (arr_left_arm, 'action.left_arm', 7),
+                    (arr_right_arm, 'action.right_arm', 7),
+                ]:
+                    if arr.ndim != 2 or arr.shape[1] != expected_len:
+                        # allow shape (H,) for single-step and broadcast
+                        if arr.ndim == 1 and arr.shape[0] == expected_len:
+                            arr = np.tile(arr[np.newaxis, :], (horizon, 1))
+                        else:
+                            self.logger.error("Unexpected shape for %s: %s", name, arr.shape)
+                            return np.zeros((16, 43), dtype=np.float64)
+
+                # assign into the action tensor (horizon x 43)
+                g1_actions[:, 29:36] = arr_left[: g1_actions.shape[0], :]
+                g1_actions[:, 36:43] = arr_right[: g1_actions.shape[0], :]
+                g1_actions[:, 15:22] = arr_left_arm[: g1_actions.shape[0], :]
+                g1_actions[:, 22:29] = arr_right_arm[: g1_actions.shape[0], :]
+
+                return g1_actions
+            except Exception as e:
+                self.logger.exception("Failed to construct g1 action array: %s", e)
+                return np.zeros((16, 43), dtype=np.float64)
+
+        # If server returned an ndarray-like object, try to coerce and validate
+        try:
+            arr = np.asarray(action_chunk)
+            if arr.ndim == 2 and arr.shape[1] == 43:
+                return arr.astype(np.float64)
+            else:
+                self.logger.error("Policy returned array of unexpected shape: %s", arr.shape)
+                return np.zeros((16, 43), dtype=np.float64)
+        except Exception:
+            self.logger.error("Policy returned unrecognized response type: %s", type(action_chunk))
+            return np.zeros((16, 43), dtype=np.float64)
 
 
 #################################################################################
@@ -210,7 +306,7 @@ class EvalConfig:
     policy_host: str = "0.0.0.0"  # host of the gr00t server
     policy_port: int = 5555  # port of the gr00t server
     action_horizon: int = 8  # number of actions to execute from the action chunk
-    lang_instruction: str = "Grab pens and place into pen holder."
+    lang_instruction: str = "Pick the apple from the table and place it into the basket."
     play_sounds: bool = False  # whether to play sounds
     timeout: int = 60  # timeout in seconds
     show_images: bool = False  # whether to show images
@@ -223,7 +319,7 @@ def eval(cfg: EvalConfig):
     input("Press Enter to continue...")
     
     try:
-        use_sim = True
+        use_sim = False
         if use_sim:
             print("Initializing simulation mode...")
             ChannelFactoryInitialize(1, "lo")
@@ -299,8 +395,19 @@ def eval(cfg: EvalConfig):
             
             print(f"Received {action_chunk.shape} actions")
             
-            for i in range(7):
-                custom.target_states = action_chunk[i]       
+            for i in range(16):
+                joint_positions = action_chunk[i].tolist()
+                left_leg     = joint_positions[0:6]
+                right_leg    = joint_positions[6:12]
+                waist        = joint_positions[12:15]
+                right_arm     = joint_positions[15:22]
+                left_hand    = joint_positions[29:36]
+                left_arm    = joint_positions[22:29]
+                right_hand   = joint_positions[36:43]
+                
+                pub_arr = left_leg + right_leg + waist + right_arm + left_arm + left_hand + right_hand
+                print(len(pub_arr))
+                custom.target_states = pub_arr
                 time.sleep(0.02)  # 50Hz control loop
             
     except KeyboardInterrupt:
@@ -316,3 +423,4 @@ def eval(cfg: EvalConfig):
 
 if __name__ == "__main__":
     eval()
+# EOF

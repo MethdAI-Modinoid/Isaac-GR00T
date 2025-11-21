@@ -48,3 +48,57 @@ sudo apt install libyaml-cpp-dev
 export PATH=~/drive2/humanoid_ws/src/Isaac-GR00T/.venv/bin:$PATH
 
 xfreerdp /v:192.168.x.y
+
+######################################
+DOCKER HISTORY
+
+
+sudo apt update
+sudo apt install iproute2
+sudo apt install iputils
+
+as root user:
+source .venv/bin/activate
+pip install -e .
+pip install logging_mp
+
+
+as deepansh:
+sudo apt update
+sudo apt install nano
+nano g1_deploy/eval_g1.py
+# Remove the sys.path line
+
+as root user:
+source .venv/bin/activate
+python g1_deploy/eval_g1.py \
+    --policy_host=0.0.0.0 \
+    --lang_instruction="Pick the apple from the table and place it into the basket."
+
+# nano into eval_g1, uncomment groot.eval.service import and comment service import
+# nano into eval_g1, set network interface in channel factory to eth0
+
+# in a separate terminal
+python scripts/inference_service.py --server \
+    --model_path ./checkpoints/full-g1-mix-fruits/checkpoint-15000   \
+      --embodiment-tag new_embodiment   \
+        --data-config unitree_g1_full_body  \
+           --denoising-steps 4
+
+python scripts/eval_policy.py --plot \
+   --embodiment_tag new_embodiment \
+   --model_path ./checkpoints/full-g1-mix-fruits/checkpoint-15000 \
+   --data_config unitree_g1 \
+   --dataset_path datasets/PhysicalAI-Robotics-GR00T-Teleop-G1/g1-pick-apple/ \
+   --video_backend decord \
+   --modality_keys left_arm right_arm
+
+#also start the image server:
+ssh into unitree
+run image_server
+
+nano g1_deploy/eval_g1
+sudo ip link set lo multicast on
+
+###########################
+
