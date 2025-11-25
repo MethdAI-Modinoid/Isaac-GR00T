@@ -14,15 +14,17 @@ export CUDA_HOME=/usr/local/cuda-12.8
 
 PYTHONPATH=$PWD python scripts/gr00t_finetune.py \
     --dataset-path ${dataset_list[@]} \
-    --num-gpus 1 --batch-size 95  --output-dir ./checkpoints/full-g1-mix-fruits/  \
+    --num-gpus 1 --batch-size 95  --output-dir ./checkpoints/converted_vscode/  \
+    --data-config unitree_g1 --max-steps 15000
+
+PYTHONPATH=$PWD python scripts/gr00t_finetune.py \
+    --dataset-path ./datasets/test_dataset \
+    --num-gpus 1 --batch-size 95  --output-dir ./checkpoints/test_dataset/  \
     --data-config unitree_g1 --max-steps 15000
 
 PYTHONPATH=$PWD python g1_deploy/eval_g1.py \
     --policy_host=0.0.0.0 \
     --lang_instruction="Pick the apple from the table and place it into the basket."
-
-
-
 
 source ~/drive2/humanoid_ws/install/setup.bash
 source ~/drive2/humanoid_ws/src/unitree_ros2/cyclonedds_ws/install/setup.bash
@@ -52,6 +54,7 @@ xfreerdp /v:192.168.x.y
 ######################################
 DOCKER HISTORY
 
+export HF_HUB_DISABLE_XET=1
 
 sudo apt update
 sudo apt install iproute2
@@ -93,7 +96,7 @@ python scripts/eval_policy.py --plot \
    --video_backend decord \
    --modality_keys left_arm right_arm
 
-#also start the image server:
+# also start the image server:
 ssh into unitree
 run image_server
 
@@ -102,3 +105,12 @@ sudo ip link set lo multicast on
 
 ###########################
 
+repo download:
+huggingface-cli download \
+    --repo-type dataset deepansh-methdai/test_dataset \
+    --local-dir ./datasets/
+
+Removed count variables from stats.json
+Using video backend as decord
+Converted to h264 codec
+--> for f in datasets/test_dataset/videos/chunk-000/observation.images.camera/*.mp4; do ffmpeg -y -i "$f" -c:v libx264 -pix_fmt yuv420p -movflags +faststart "${f%.mp4}_h264.mp4" && mv "${f%.mp4}_h264.mp4" "$f"; done

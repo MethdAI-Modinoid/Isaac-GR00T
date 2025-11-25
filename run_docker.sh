@@ -8,6 +8,8 @@ HOST_DEPLOY="$(pwd)/g1_deploy/"
 CONTAINER_DEPLOY="/workspace/g1_deploy/"
 HOST_DATASETS="$(pwd)/datasets"
 CONTAINER_DATASETS="/workspace/datasets"
+HOST_WANDB="$(pwd)/wandb"
+CONTAINER_WANDB="/workspace/wandb"
 
 # Optional: X11 forwarding for GUI apps
 X11_FLAGS="-v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY=$DISPLAY"
@@ -30,5 +32,7 @@ exec docker run --gpus all -it --rm \
   $X11_FLAGS \
   -v "$HOST_CHECKPOINTS":"$CONTAINER_CHECKPOINTS" \
   -v "$HOST_DEPLOY":"$CONTAINER_DEPLOY" \
+  -v "$HOST_WANDB":"$CONTAINER_WANDB" \
   -v "$HOST_DATASETS":"$CONTAINER_DATASETS" \
+  -v "$HOST_WANDB":"$CONTAINER_WANDB" \
   "$IMAGE" "$@"
